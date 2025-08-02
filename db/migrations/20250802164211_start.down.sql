@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS group_chats;
+DROP TABLE IF EXISTS personal_chats;
+DROP TABLE IF EXISTS users;
