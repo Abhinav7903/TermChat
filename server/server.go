@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"termchat/db/postgres"
@@ -37,17 +38,17 @@ func Run(env *string) {
 	var level slog.Level
 	switch *env {
 	case "dev":
-		viper.SetConfigName("dev")
+		viper.SetConfigName("term_chat_dev")
 		level = slog.LevelDebug
 	case "prod":
-		viper.SetConfigName("prod")
+		viper.SetConfigName("term_chat_prod")
 		level = slog.LevelInfo
 	default:
-		viper.SetConfigName("staging")
+		viper.SetConfigName("term_chat_staging")
 		level = slog.LevelDebug
 	}
 
-	viper.AddConfigPath("$HOME/.conf")
+	viper.AddConfigPath("$HOME/.sck")
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -55,11 +56,9 @@ func Run(env *string) {
 		return
 	}
 
-	// Initialize logger with correct log level
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
-	slog.SetDefault(logger) // Set the logger as the default
+	slog.SetDefault(logger)
 
-	// Initialize dependencies
 	postgres, err := postgres.NewPostgres()
 	if err != nil {
 		logger.Error("Error initializing Postgres", "error", err)
@@ -75,29 +74,25 @@ func Run(env *string) {
 		message: postgres,
 	}
 
-	// Register routes (Ensure this function exists)
 	server.RegisterRoutes()
 
-	port := ":8080"
-	if *env != "dev" {
-		port = ":8194"
-	}
-
-	server.logger.Info("Starting server", "mode", *env, "port", port)
-
 	// Start HTTP server
-	if err := http.ListenAndServe(port, server); err != nil {
-		server.logger.Error("Server failed to start", "error", err)
-	}
+	go func() {
+		port := ":8080"
+		if *env != "dev" {
+			port = ":8194"
+		}
+		logger.Info("Starting HTTP server", "port", port)
+		if err := http.ListenAndServe(port, server); err != nil {
+			logger.Error("HTTP server failed", "error", err)
+		}
+	}()
+
+	// Start TCP server
+	StartTCPServer("9000", server)
 }
 
-func (s *Server) respond(
-	w http.ResponseWriter,
-	data interface{},
-	status int,
-	err error,
-) {
-	// Set content type header
+func (s *Server) respond(w http.ResponseWriter, data interface{}, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
@@ -110,12 +105,29 @@ func (s *Server) respond(
 	} else {
 		resp = &ResponseMsg{
 			Message: err.Error(),
-			Data:    nil, // Ensure no conflicting message structure
+			Data:    nil,
 		}
 	}
 
-	// Encode the response
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Error("Error in encoding the response", "error", err)
+	}
+}
+
+func StartTCPServer(port string, srv *Server) {
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		srv.logger.Error("TCP listener failed", "error", err)
+		return
+	}
+	srv.logger.Info("TCP server listening", "port", port)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			srv.logger.Error("Failed to accept TCP connection", "error", err)
+			continue
+		}
+		go handleTelnetClient(conn, srv)
 	}
 }
