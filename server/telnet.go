@@ -252,6 +252,16 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			}
 			conn.Write([]byte(fmt.Sprintf("You are logged in as: %s \n", currentUser.Name)))
 
+		case "/version":
+			conn.Write([]byte("TermChat CLI over Telnet v1.0\n"))
+
+		case "/about":
+			conn.Write([]byte("TermChat is a terminal-based chat application.\n"))
+			conn.Write([]byte("It allows users to register, log in, and chat with others in real time via a simple Telnet interface.\n"))
+			conn.Write([]byte("This project is open-source and intended for learning, experimentation, or lightweight internal use.\n"))
+			conn.Write([]byte("Developed by Abhinav.\n"))
+			conn.Write([]byte("Use /help to view available commands.\n"))
+
 		default:
 			conn.Write([]byte("Unknown command\n" +
 				"Type /help for a list of commands.\n"))
