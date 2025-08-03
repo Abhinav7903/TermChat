@@ -41,7 +41,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			conn.Write([]byte("Bye!\n"))
 			return
 
-		case "/register":
+		case "/register", "/signup", "/create", "/new", "/add":
 			parts := strings.Split(argLine, " ")
 			if len(parts) != 3 {
 				conn.Write([]byte("Usage: /register <email> <username> <password>\n"))
@@ -61,7 +61,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				conn.Write([]byte("User registered successfully\n"))
 			}
 
-		case "/login":
+		case "/login", "/signin":
 			parts := strings.Split(argLine, " ")
 			if len(parts) != 2 {
 				conn.Write([]byte("Usage: /login <email> <password>\n"))
@@ -76,6 +76,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				currentUser = &loggedInUser
 				conn.Write([]byte(fmt.Sprintf("Welcome %s!\n", currentUser.Name)))
 			}
+			continue
 
 			// case "/chat":
 			if currentUser == nil {
@@ -160,7 +161,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				}
 			}
 
-		case "/send":
+		case "/send", "/message", "/msg", "/dm", "/direct":
 			if currentUser == nil {
 				conn.Write([]byte("Please login first\n"))
 				continue
@@ -178,7 +179,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				conn.Write([]byte("Message sent.\n"))
 			}
 
-		case "/room":
+		case "/room", "/rooms", "/chatrooms", "/recent":
 			if currentUser == nil {
 				conn.Write([]byte("Please login first\n"))
 				continue
@@ -197,7 +198,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				}
 			}
 
-		case "/last":
+		case "/last", "/history", "/last5":
 			if currentUser == nil {
 				conn.Write([]byte("Please login first\n"))
 				continue
@@ -223,8 +224,37 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				conn.Write([]byte(fmt.Sprintf("[%s] %s: %s\n", m.SentAt, prefix, m.Content)))
 			}
 
+		case "/help":
+			conn.Write([]byte("Available commands:\n"))
+			conn.Write([]byte("/register <email> <username> <password> - Register a new user\n"))
+			conn.Write([]byte("/login <email> <password> - Login to your account\n"))
+			conn.Write([]byte("/chat <username> - Start a chat with a user\n"))
+			conn.Write([]byte("/send <username> <message> - Send a message to a user\n"))
+			conn.Write([]byte("/room - List your chat rooms\n"))
+			conn.Write([]byte("/last <username> - Show last 5 messages with a user\n"))
+			conn.Write([]byte("/exit - Exit the CLI\n"))
+
+		case "/clear":
+			if currentUser == nil {
+				conn.Write([]byte("Please login first\n"))
+				continue
+			}
+			conn.Write([]byte("\033[H\033[2J")) // ANSI escape code to clear terminal
+			conn.Write([]byte("Terminal cleared.\n"))
+
+		case "/ping":
+			conn.Write([]byte("PONG\n"))
+
+		case "/whoami":
+			if currentUser == nil {
+				conn.Write([]byte("Please login first\n"))
+				continue
+			}
+			conn.Write([]byte(fmt.Sprintf("You are logged in as: %s \n", currentUser.Name)))
+
 		default:
-			conn.Write([]byte("Unknown command\n"))
+			conn.Write([]byte("Unknown command\n" +
+				"Type /help for a list of commands.\n"))
 		}
 	}
 }
