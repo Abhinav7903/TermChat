@@ -129,3 +129,31 @@ func (p *Postgres) DeleteUser(email string) error {
 	}
 	return nil
 }
+
+// search username it will give auto suggestion
+func (p *Postgres) SearchUsersByName(name string) ([]factory.User, error) {
+	query := `
+		SELECT id, email, username, created_at
+		FROM users WHERE username ILIKE $1
+	`
+	rows, err := p.DbConn.Query(query, name+"%")
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users: %w", err)
+	}
+	defer rows.Close()
+
+	var usersList []factory.User
+	for rows.Next() {
+		var user factory.User
+		var createdAt time.Time
+
+		err := rows.Scan(&user.ID, &user.Email, &user.Name, &createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan user row: %w", err)
+		}
+
+		user.Created = createdAt.Format(time.RFC3339)
+		usersList = append(usersList, user)
+	}
+	return usersList, nil
+}

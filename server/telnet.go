@@ -8,7 +8,6 @@ import (
 	"strings"
 	"termchat/factory"
 	"termchat/pkg/users"
-	"time"
 )
 
 func handleTelnetClient(conn net.Conn, srv *Server) {
@@ -78,7 +77,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			}
 			continue
 
-			// case "/chat":
+		case "/chat":
 			if currentUser == nil {
 				conn.Write([]byte("Please login first\n"))
 				continue
@@ -89,6 +88,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				continue
 			}
 
+			// Fetch chat history
 			messages, err := srv.message.GetMessagesBetweenUsers(currentUser.Name, chatPartner)
 			if err != nil {
 				conn.Write([]byte(fmt.Sprintf("Failed to get messages: %s\n", err)))
@@ -96,39 +96,42 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			}
 
 			conn.Write([]byte(fmt.Sprintf("----- Chat with %s -----\n", chatPartner)))
-			var lastSeen time.Time
 			for _, m := range messages {
 				prefix := m.SenderName
 				if m.SenderID == currentUser.ID {
 					prefix = "You"
 				}
 				conn.Write([]byte(fmt.Sprintf("[%s] %s: %s\n", m.SentAt, prefix, m.Content)))
-				parsedTime, _ := time.Parse("2006-01-02 15:04:05", m.SentAt)
-				if parsedTime.After(lastSeen) {
-					lastSeen = parsedTime
-				}
 			}
 			conn.Write([]byte("Type your message. Use /exit to leave chat.\n"))
 
+			// Get chat ID
 			chatID, err := srv.message.GetChatID(currentUser.Name, chatPartner)
 			if err != nil {
 				conn.Write([]byte(fmt.Sprintf("Unable to get chat ID: %s\n", err)))
 				continue
 			}
 
+			// Setup pub/sub
 			done := make(chan struct{})
 			pubsub := srv.redis.Client.Subscribe(context.Background(), fmt.Sprintf("chat:%d", chatID))
 			msgChan := pubsub.Channel()
 
+			// Listen for incoming messages from Redis
 			go func() {
+				defer pubsub.Close()
 				for {
 					select {
 					case <-done:
-						pubsub.Close()
 						return
-					case msg := <-msgChan:
+					case msg, ok := <-msgChan:
+						if !ok {
+							return
+						}
 						parts := strings.SplitN(msg.Payload, "|", 3)
 						if len(parts) != 3 {
+							// Debugging: show bad payload
+							conn.Write([]byte(fmt.Sprintf("DEBUG invalid payload: %s\n", msg.Payload)))
 							continue
 						}
 						username, timestamp, content := parts[0], parts[1], parts[2]
@@ -140,6 +143,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				}
 			}()
 
+			// Chat input loop
 			for {
 				conn.Write([]byte(fmt.Sprintf("[%s]> ", chatPartner)))
 				msgLine, err := reader.ReadString('\n')
@@ -148,9 +152,10 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 					break
 				}
 				msgLine = strings.TrimSpace(msgLine)
+
 				if msgLine == "/exit" {
 					conn.Write([]byte("Exiting chat...\n"))
-					done <- struct{}{}
+					close(done) // notify goroutine to stop
 					break
 				}
 				if msgLine != "" {
@@ -261,6 +266,32 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			conn.Write([]byte("This project is open-source and intended for learning, experimentation, or lightweight internal use.\n"))
 			conn.Write([]byte("Developed by Abhinav.\n"))
 			conn.Write([]byte("Use /help to view available commands.\n"))
+
+		case "/search":
+			if currentUser == nil {
+				conn.Write([]byte("Please login first\n"))
+				continue
+			}
+			keyword := strings.TrimSpace(argLine)
+			if keyword == "" {
+				conn.Write([]byte("Usage: /search <username_prefix>\n"))
+				continue
+			}
+
+			usersFound, err := srv.user.SearchUsersByName(keyword)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("Search failed: %s\n", err)))
+				continue
+			}
+
+			if len(usersFound) == 0 {
+				conn.Write([]byte("No users found.\n"))
+			} else {
+				conn.Write([]byte("Matching users:\n"))
+				for _, u := range usersFound {
+					conn.Write([]byte(fmt.Sprintf("- %s (email: %s)\n", u.Name, u.Email)))
+				}
+			}
 
 		default:
 			conn.Write([]byte("Unknown command\n" +

@@ -1,9 +1,11 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"termchat/db/redis"
 	"termchat/factory"
 	"termchat/utils"
 	"time"
@@ -91,15 +93,14 @@ func (p *Postgres) SendPersonalMessage(senderUsername, receiverUsername, message
 		return fmt.Errorf("failed to get/create chat: %w", err)
 	}
 
-	// Step 3: Load encryption key from Viper
+	// Step 3: Load encryption key
 	key, err := getEncryptionKey()
 	if err != nil {
 		return fmt.Errorf("failed to get encryption key: %w", err)
 	}
 
-	// Step 4: Encrypt the message
+	// Step 4: Encrypt the message before storing in DB
 	encrypted, err := utils.EncryptAES256(message, key)
-
 	if err != nil {
 		return fmt.Errorf("failed to encrypt message: %w", err)
 	}
@@ -112,6 +113,20 @@ func (p *Postgres) SendPersonalMessage(senderUsername, receiverUsername, message
 	_, err = p.DbConn.Exec(query, senderID, chatID, encrypted)
 	if err != nil {
 		return fmt.Errorf("failed to insert encrypted message: %w", err)
+	}
+
+	// Step 6: Publish to Redis so live chat works
+	payload := fmt.Sprintf("%s|%s|%s",
+		senderUsername,
+		time.Now().Format("2006-01-02 15:04:05"),
+		message, // plaintext so receiver can read immediately
+	)
+
+	ctx := context.Background()
+	channel := fmt.Sprintf("chat:%d", chatID)
+
+	if err := redis.NewRedis(nil).Client.Publish(ctx, channel, payload).Err(); err != nil {
+		return fmt.Errorf("failed to publish message to Redis: %w", err)
 	}
 
 	return nil
