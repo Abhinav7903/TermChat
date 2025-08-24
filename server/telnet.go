@@ -342,6 +342,8 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			conn.Write([]byte("/chat <username> - Start a chat with a user\n"))
 			conn.Write([]byte("/send <username> <message> - Send a message to a user\n"))
 			conn.Write([]byte("/room - List your chat rooms\n"))
+			conn.Write([]byte("/temp <username> - Start a temporary chat with a user\n"))
+			conn.Write([]byte("/search <username_prefix> - Search users by username prefix\n"))
 			conn.Write([]byte("/last <username> - Show last 5 messages with a user\n"))
 			conn.Write([]byte("/exit - Exit the CLI\n"))
 
