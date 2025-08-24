@@ -1,4 +1,3 @@
-
 # TermChat 🖥️💬
 
 **TermChat** is a terminal-based chat application supporting **real-time messaging** via **Telnet (TCP)** and **HTTP APIs**.  
@@ -40,7 +39,7 @@ pkg/
   users/             # User repository interface & utils
 server/              # HTTP & TCP server logic
 utils/               # Encryption utilities
-````
+```
 
 ---
 
@@ -48,9 +47,9 @@ utils/               # Encryption utilities
 
 ### ✅ Prerequisites
 
-* [Go 1.23+](https://go.dev/dl/)
-* [PostgreSQL](https://www.postgresql.org/)
-* [Redis](https://redis.io/)
+- [Go 1.23+](https://go.dev/dl/)
+- [PostgreSQL](https://www.postgresql.org/)
+- [Redis](https://redis.io/)
 
 ---
 
@@ -65,7 +64,7 @@ utils/               # Encryption utilities
 
 2. **Configure environment**
 
-   * Place config files in:
+   - Place config files in:
 
      ```
      $HOME/.sck/
@@ -73,7 +72,8 @@ utils/               # Encryption utilities
        ├── term_chat_staging.json
        └── term_chat_prod.json
      ```
-   * Example `term_chat_dev.json`:
+
+   - Example `term_chat_dev.json`:
 
      ```json
      {
@@ -104,8 +104,8 @@ utils/               # Encryption utilities
    ./termchat --env dev
    ```
 
-   * HTTP server runs on **:8080** (dev) / **:8194** (prod)
-   * TCP chat server runs on **:9000**
+   - HTTP server runs on **:8080** (dev) / **:8194** (prod)
+   - TCP chat server runs on **:9000**
 
 ---
 
@@ -121,16 +121,16 @@ telnet localhost 9000
 
 Available commands:
 
-* `/register <email> <username> <password>`
-* `/login <email> <password>`
-* `/chat <username>` → Start personal chat
-* `/send <username> <message>` → Send message
-* `/room` → Join group chat room
-* `/temp <username>` → Start temporary chat
-* `/search <username_prefix>` → Search users
-* `/last <username>` → Show last chat
-* `/exit` → Quit
-* `/help` → Show available commands
+- `/register <email> <username> <password>`
+- `/login <email> <password>`
+- `/chat <username>` → Start personal chat
+- `/send <username> <message>` → Send message
+- `/room` → Join group chat room
+- `/temp <username>` → Start temporary chat
+- `/search <username_prefix>` → Search users
+- `/last <username>` → Show last chat
+- `/exit` → Quit
+- `/help` → Show available commands
 
 ---
 
@@ -148,9 +148,9 @@ curl http://localhost:8080/ping
 
 ## 🔐 Security
 
-* Passwords: **bcrypt** hashing
-* Messages: **AES-256-GCM encryption**
-* Session tokens: stored in **Redis**
+- Passwords: **bcrypt** hashing
+- Messages: **AES-256-GCM encryption**
+- Session tokens: stored in **Redis**
 
 ---
 
@@ -158,5 +158,61 @@ curl http://localhost:8080/ping
 
 MIT License © 2025 [Abhinav Ashish](https://github.com/Abhinav7903)
 
+---
+### 🌐 Tailscale Deployment (Recommended)
 
+You can run TermChat securely over [Tailscale](https://tailscale.com), a mesh VPN that gives each machine a private IP (e.g., `100.x.x.x`).
 
+#### 1. Install Tailscale
+
+On both server and client machines:
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+#### 2. Start TermChat on Server
+
+```sh
+./termchat --env dev
+```
+
+By default:
+
+- **TCP Chat:** `:9000`
+- **HTTP API:** `:8080`
+
+#### 3. Find Your Server’s Tailscale IP
+
+```sh
+tailscale ip -4
+```
+
+Example output: `100.72.55.34`
+
+#### 4. Connect from Another Device
+
+From any client on the same Tailnet:
+
+- **Chat via Telnet:**
+
+    ```sh
+    telnet 100.72.55.34 9000
+    ```
+
+- **Check HTTP health:**
+
+    ```sh
+    curl http://100.72.55.34:8080/ping
+    ```
+
+#### 5. (Optional) Use MagicDNS
+
+If enabled in Tailscale admin:
+
+```sh
+telnet myserver.tailnet-name.ts.net 9000
+```
+
+✅ TermChat works securely without opening ports to the public internet.
