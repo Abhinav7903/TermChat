@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"termchat/factory"
 	"termchat/pkg/users"
+	"time"
 )
 
 func handleTelnetClient(conn net.Conn, srv *Server) {
@@ -228,6 +230,110 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				}
 				conn.Write([]byte(fmt.Sprintf("[%s] %s: %s\n", m.SentAt, prefix, m.Content)))
 			}
+		case "/tempchat", "/temp", "/tempdm":
+			if currentUser == nil {
+				conn.Write([]byte("Please login first\n"))
+				continue
+			}
+			chatPartner := strings.TrimSpace(argLine)
+			if chatPartner == "" {
+				conn.Write([]byte("Usage: /tempchat <username>\n"))
+				continue
+			}
+
+			// Shared Redis channel for both users
+			channelName := makeTempChatChannel(currentUser.Name, chatPartner)
+
+			conn.Write([]byte(fmt.Sprintf("----- Temporary Chat with %s -----\n", chatPartner)))
+			conn.Write([]byte("Type your message. Use /exit to leave chat.\n"))
+
+			ctx := context.Background()
+			pubsub := srv.redis.Client.Subscribe(ctx, channelName)
+			msgChan := pubsub.Channel()
+
+			// channel + sync.Once ensures no double-close panic
+			done := make(chan struct{})
+			var once sync.Once
+			safeClose := func() {
+				once.Do(func() { close(done) })
+			}
+
+			// Goroutine: listen for peer messages
+			go func() {
+				defer pubsub.Close()
+				for {
+					select {
+					case <-done:
+						return
+					case msg, ok := <-msgChan:
+						if !ok {
+							return
+						}
+						parts := strings.SplitN(msg.Payload, "|", 3)
+						if len(parts) < 2 {
+							continue
+						}
+
+						sender := parts[0]
+						second := parts[1]
+
+						// Peer left → close chat
+						if second == "/close" {
+							conn.Write([]byte(fmt.Sprintf("\n%s has left. Temporary chat closed.\n", sender)))
+							safeClose()
+							return
+						}
+
+						// Regular message
+						if len(parts) == 3 && sender != currentUser.Name {
+							timestamp, content := parts[1], parts[2]
+							conn.Write([]byte(fmt.Sprintf("\n[%s] %s: %s\n", timestamp, sender, content)))
+							conn.Write([]byte(fmt.Sprintf("[%s]> ", chatPartner)))
+						}
+					}
+				}
+			}()
+
+			// Main input loop (user typing)
+			for {
+				select {
+				case <-done:
+					goto TempChatExit
+				default:
+				}
+
+				conn.Write([]byte(fmt.Sprintf("[%s]> ", chatPartner)))
+				msgLine, err := reader.ReadString('\n')
+				if err != nil {
+					srv.logger.Error("Temp chat input failed", "error", err)
+					safeClose()
+					break
+				}
+				msgLine = strings.TrimSpace(msgLine)
+				if msgLine == "" {
+					continue
+				}
+
+				// Exit condition
+				if msgLine == "/exit" {
+					conn.Write([]byte("Exiting temporary chat...\n"))
+					payload := fmt.Sprintf("%s|/close", currentUser.Name)
+					_ = srv.redis.Client.Publish(ctx, channelName, payload).Err()
+					safeClose()
+					break
+				}
+
+				// Normal message publish
+				payload := fmt.Sprintf("%s|%s|%s",
+					currentUser.Name,
+					time.Now().Format("2006-01-02 15:04:05"),
+					msgLine,
+				)
+				_ = srv.redis.Client.Publish(ctx, channelName, payload).Err()
+			}
+
+		TempChatExit:
+			conn.Write([]byte("\n"))
 
 		case "/help":
 			conn.Write([]byte("Available commands:\n"))
@@ -298,4 +404,14 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				"Type /help for a list of commands.\n"))
 		}
 	}
+}
+
+// makeTempChatChannel normalizes the channel so both users join the same one.
+func makeTempChatChannel(u1, u2 string) string {
+	a := strings.ToLower(strings.TrimSpace(u1))
+	b := strings.ToLower(strings.TrimSpace(u2))
+	if a < b {
+		return fmt.Sprintf("tempchat:%s:%s", a, b)
+	}
+	return fmt.Sprintf("tempchat:%s:%s", b, a)
 }
