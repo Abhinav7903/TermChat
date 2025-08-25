@@ -1,4 +1,5 @@
 # TermChat 🖥️💬
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Abhinav7903/TermChat)
 
 **TermChat** is a terminal-based chat application supporting **real-time messaging** via **Telnet (TCP)** and **HTTP APIs**.  
 It features **user registration, login, encrypted messaging, chat rooms, and temporary chats**, all backed by **PostgreSQL** and **Redis**.
