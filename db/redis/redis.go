@@ -40,7 +40,7 @@ func initialize(envType *string) *redis.Client {
 
 // Ping returns a simple PONG string from Redis to verify connection
 func (r *Redis) Ping() string {
-	return fmt.Sprintf("PONG1 %s", r.Client.Ping(context.Background()).Val())
+	return r.Client.Ping(context.Background()).Val()
 }
 
 // NewRedis initializes and returns a singleton Redis client
@@ -52,7 +52,12 @@ func NewRedis(envType *string) *Redis {
 		}
 		slog.Debug("Connected with Redis!!!!!")
 		// Call ping to verify connection
-		slog.Info(instance.Ping())
+		pingResult := instance.Ping()
+		if pingResult != "PONG" {
+			slog.Error("Failed to connect to Redis", "ping", pingResult)
+			panic(fmt.Sprintf("Failed to connect to Redis: %s", pingResult))
+		}
+		slog.Info(pingResult)
 	})
 	return instance
 }
