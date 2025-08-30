@@ -217,3 +217,5 @@ telnet myserver.tailnet-name.ts.net 9000
 ```
 
 ✅ TermChat works securely without opening ports to the public internet.
+
+![Fast Demo](https://github.com/Abhinav7903/TermChat/blob/main/demo.gif)
