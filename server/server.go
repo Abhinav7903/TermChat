@@ -49,7 +49,7 @@ func Run(env *string) {
 		viper.SetConfigName("term_chat_staging")
 		level = slog.LevelDebug
 	}
-
+	viper.AutomaticEnv()
 	viper.AddConfigPath("$HOME/.sck")
 
 	err := viper.ReadInConfig()
