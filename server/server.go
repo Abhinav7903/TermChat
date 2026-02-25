@@ -50,12 +50,11 @@ func Run(env *string) {
 		level = slog.LevelDebug
 	}
 	viper.AutomaticEnv()
-	viper.AddConfigPath("$HOME/.sck")
-
+	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {
-		slog.Error("Error reading config file", "error", err)
-		return
+		slog.Warn("No config file found, relying on environment variables", "error", err)
+
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
@@ -81,13 +80,16 @@ func Run(env *string) {
 
 	// Start HTTP server
 	go func() {
-		port := ":8080"
-		if *env != "dev" {
-			port = ":8194"
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
 		}
+
 		logger.Info("Starting HTTP server", "port", port)
+
 		handler := enableCORS(server)
-		if err := http.ListenAndServe(port, handler); err != nil {
+
+		if err := http.ListenAndServe(":"+port, handler); err != nil {
 			logger.Error("HTTP server failed", "error", err)
 		}
 	}()

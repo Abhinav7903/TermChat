@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 
 	"github.com/creack/pty"
@@ -26,8 +27,14 @@ func (s *Server) HandleWebClient() http.HandlerFunc {
 		}
 		defer conn.Close()
 
-		// Spawn client mode
-		cmd := exec.Command("./termchat", "-mode=client")
+		exePath, err := os.Executable()
+		if err != nil {
+			s.logger.Error("Failed to get executable path", "error", err)
+			return
+		}
+
+		cmd := exec.Command(exePath, "-mode=client")
+
 		ptmx, err := pty.Start(cmd)
 		if err != nil {
 			s.logger.Error("PTY start failed", "error", err)
@@ -38,7 +45,6 @@ func (s *Server) HandleWebClient() http.HandlerFunc {
 			cmd.Process.Kill()
 		}()
 
-		// 🔥 IMPORTANT: set initial terminal size
 		pty.Setsize(ptmx, &pty.Winsize{
 			Rows: 40,
 			Cols: 120,
@@ -66,7 +72,6 @@ func (s *Server) HandleWebClient() http.HandlerFunc {
 				break
 			}
 
-			// Handle resize messages
 			if msgType == websocket.TextMessage {
 				var rmsg resizeMsg
 				if err := json.Unmarshal(msg, &rmsg); err == nil && rmsg.Type == "resize" {
@@ -78,9 +83,7 @@ func (s *Server) HandleWebClient() http.HandlerFunc {
 				}
 			}
 
-			// Normal keystrokes
-			_, err = ptmx.Write(msg)
-			if err != nil {
+			if _, err := ptmx.Write(msg); err != nil {
 				break
 			}
 		}
