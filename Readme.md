@@ -6,6 +6,8 @@
 
 **TermChat** is a terminal-based chat application with a fully interactive **Bubble Tea TUI client** and a robust **TCP/Telnet server**. It supports real-time messaging, persistent chat history, ephemeral chats, live notifications, and encrypted message storage — all backed by **PostgreSQL** and **Redis**.
 
+![UI-DEMO](https://github.com/Abhinav7903/TermChat/blob/main/UIDEMo.gif)
+
 ![Fast Demo](https://github.com/Abhinav7903/TermChat/blob/main/demo.gif)
 
 ---
