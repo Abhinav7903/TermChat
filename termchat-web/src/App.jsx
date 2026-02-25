@@ -21,10 +21,13 @@ function App() {
     term.open(terminalRef.current);
     fitAddon.fit();
 
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const host = window.location.hostname;
 
-    const socket = new WebSocket(`${protocol}://${host}:8080/terminal`);
+    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+
+    const protocol = BACKEND_URL.startsWith("https") ? "wss" : "ws";
+    const host = new URL(BACKEND_URL).host;
+
+    const socket = new WebSocket(`${protocol}://${host}/terminal`);
     socket.binaryType = "arraybuffer";
     socketRef.current = socket;
 
