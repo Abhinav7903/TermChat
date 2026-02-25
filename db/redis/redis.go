@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/spf13/viper"
 )
 
 // Redis struct holds the Redis client
@@ -23,19 +25,22 @@ var instance *Redis
 // initialize initializes the Redis client with the provided environment type
 func initialize(envType *string) *redis.Client {
 	slog.Debug("Initializing Redis")
-	var rdb *redis.Client
-	if *envType == "dev" {
-		rdb = redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // Change to your Redis instance
-			DB:   0,                // Use default DB
-		})
-	} else {
-		rdb = redis.NewClient(&redis.Options{
-			Addr: "localhost:6379", // Change to your Redis instance
-			DB:   0,                // Use default DB
-		})
+
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = viper.GetString("redis")
 	}
-	return rdb
+
+	if redisURL == "" {
+		panic("REDIS_URL not provided")
+	}
+
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		panic(fmt.Sprintf("Invalid Redis URL: %v", err))
+	}
+
+	return redis.NewClient(opt)
 }
 
 // Ping returns a simple PONG string from Redis to verify connection
