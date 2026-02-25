@@ -4,6 +4,8 @@ import "net/http"
 
 func (s *Server) RegisterRoutes() {
 	s.router.HandleFunc("/ping", s.HandlePong()).Methods(http.MethodGet)
+	s.router.HandleFunc("/ws", s.HandleWS()).Methods(http.MethodGet)
+	s.router.HandleFunc("/terminal", s.HandleWebClient())
 
 }
 
@@ -15,5 +17,6 @@ func (s *Server) HandlePong() http.HandlerFunc {
 			http.StatusOK,
 			nil,
 		)
+
 	}
 }

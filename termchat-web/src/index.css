@@ -1,0 +1,179 @@
+/* ── Reset & full-screen base ──────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  /* prevent double scrollbars — xterm handles its own */
+  background: #0d1117;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Status bar ───────────────────────────────────────────────────────────── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 36px;
+  min-height: 36px;
+  /* never collapse on mobile */
+  padding: 0 16px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  color: #8b949e;
+  font-family: "JetBrains Mono", "Fira Code", Menlo, monospace;
+  font-size: 12px;
+  user-select: none;
+  flex-shrink: 0;
+  /* don't let flexbox shrink the bar */
+}
+
+.status-logo {
+  font-weight: 700;
+  color: #58a6ff;
+  letter-spacing: 0.5px;
+}
+
+.status-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #6e7681;
+  font-size: 11px;
+}
+
+.status-hint kbd {
+  display: inline-block;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10px;
+  color: #8b949e;
+  line-height: 1.6;
+}
+
+/* Hide hints on very small screens */
+@media (max-width: 480px) {
+  .status-hint {
+    display: none;
+  }
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+  box-shadow: 0 0 6px #3fb95066;
+  animation: pulse 2.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+/* ── Terminal container ────────────────────────────────────────────────────── */
+.terminal-container {
+  flex: 1;
+  /* fill remaining height after the status bar */
+  min-height: 0;
+  /* crucial: lets flex child shrink below content size */
+  width: 100%;
+  overflow: hidden;
+  background: #0d1117;
+  padding: 4px 8px;
+  /* small inset so xterm text isn't flush with edges */
+}
+
+/*
+  xterm.js creates a div.xterm inside .terminal-container.
+  These selectors ensure it fills 100% of the container so FitAddon
+  measures the right dimensions on mobile and desktop alike.
+*/
+.terminal-container .xterm {
+  height: 100%;
+}
+
+.terminal-container .xterm-viewport {
+  /* xterm sets overflow-y:scroll by default — keep it but style the scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: #30363d #0d1117;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}
+
+/*
+  The xterm canvas needs to fill the container. FitAddon calculates cols/rows
+  from the container's measured width/height, so we must not add borders or
+  extra padding that xterm doesn't account for.
+*/
+.terminal-container .xterm-screen {
+  /* Let xterm control dimensions; don't override width/height here */
+}
+
+/* ── Mobile adjustments ────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .terminal-container {
+    padding: 2px 4px;
+    /* less inset on small screens */
+  }
+}
+
+/*
+  On mobile browsers, the viewport height changes when the on-screen keyboard
+  appears. The ResizeObserver in App.jsx handles the re-fit automatically,
+  but we ensure there's no jump by using 100dvh (dynamic viewport height)
+  on supporting browsers, falling back to 100vh.
+*/
+@supports (height: 100dvh) {
+
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}

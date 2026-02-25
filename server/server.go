@@ -12,6 +12,7 @@ import (
 	"termchat/pkg/users"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"github.com/spf13/viper"
 )
 
@@ -21,6 +22,7 @@ type Server struct {
 	logger  *slog.Logger
 	user    users.Repository
 	message message.Repository
+	clients map[*websocket.Conn]bool
 }
 
 type ResponseMsg struct {
@@ -72,6 +74,7 @@ func Run(env *string) {
 		logger:  logger,
 		user:    postgres,
 		message: postgres,
+		clients: make(map[*websocket.Conn]bool),
 	}
 
 	server.RegisterRoutes()
@@ -83,7 +86,8 @@ func Run(env *string) {
 			port = ":8194"
 		}
 		logger.Info("Starting HTTP server", "port", port)
-		if err := http.ListenAndServe(port, server); err != nil {
+		handler := enableCORS(server)
+		if err := http.ListenAndServe(port, handler); err != nil {
 			logger.Error("HTTP server failed", "error", err)
 		}
 	}()
@@ -130,4 +134,21 @@ func StartTCPServer(port string, srv *Server) {
 		}
 		go handleTelnetClient(conn, srv)
 	}
+}
+
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		w.Header().Set("Access-Control-Allow-Origin", "*") // dev only
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Handle preflight requests
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
