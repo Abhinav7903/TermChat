@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -55,7 +56,16 @@ func NewPostgres() (*Postgres, error) {
 //	}
 //	defer db.Close()
 func createConnection() (*sql.DB, error) {
-	db, err := sql.Open("postgres", viper.GetString("postgresURL"))
+	postgresURL := viper.GetString("postgres_url")
+	if postgresURL == "" {
+		// Try fallback to the old key or env var
+		postgresURL = viper.GetString("postgresURL")
+	}
+	if postgresURL == "" {
+		return nil, fmt.Errorf("POSTGRES_URL is not set. Please provide it in config or as an environment variable")
+	}
+
+	db, err := sql.Open("postgres", postgresURL)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +81,7 @@ func createConnection() (*sql.DB, error) {
 		return nil, err
 	}
 
-	slog.Info("Connected to postgres", "URL", viper.GetString("postgresURL"))
+	slog.Info("Connected to postgres", "URL", postgresURL)
 	return db, nil
 }
 

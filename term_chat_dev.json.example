@@ -1,0 +1,5 @@
+{
+  "postgres_url": "postgres://user:password@localhost:5432/term?sslmode=disable",
+  "redis_url": "redis://localhost:6379",
+  "encryption_key": "YOUR_BASE64_ENCODED_32_BYTE_KEY"
+}

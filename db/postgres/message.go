@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"termchat/db/redis"
 	"termchat/factory"
 	"termchat/utils"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/spf13/viper"
 )
 
@@ -74,7 +76,7 @@ func getEncryptionKey() ([]byte, error) {
 }
 
 // SendPersonalMessage encrypts the message using AES-256 and stores it
-func (p *Postgres) SendPersonalMessage(senderUsername, receiverUsername, message string) error {
+func (p *Postgres) SendPersonalMessage(senderUsername, receiverUsername, message, sessionID string) error {
 	var senderID, receiverID int
 
 	// Step 1: Get user IDs
@@ -116,7 +118,9 @@ func (p *Postgres) SendPersonalMessage(senderUsername, receiverUsername, message
 	}
 
 	// Step 6: Publish to Redis so live chat works
-	payload := fmt.Sprintf("%s|%s|%s",
+	// Payload format: <sessionID>|<senderUsername>|<timestamp>|<message>
+	payload := fmt.Sprintf("%s|%s|%s|%s",
+		sessionID,
 		senderUsername,
 		time.Now().Format("2006-01-02 15:04:05"),
 		message, // plaintext so receiver can read immediately
@@ -202,6 +206,7 @@ func (p *Postgres) GetMessagesBetweenUsers(username1, username2 string) ([]facto
 		messages = append(messages, msg)
 	}
 
+	p.fetchReactionsForMessages(messages)
 	return messages, nil
 }
 
@@ -390,4 +395,268 @@ func (p *Postgres) GetLastMessagesBetweenUsers(user1, user2 string, limit int) (
 	}
 
 	return messages, nil
+}
+
+// CreateGroupChat creates a new group chat
+func (p *Postgres) CreateGroupChat(name, description string, ownerID int) (int, error) {
+	var groupID int
+	query := `
+		INSERT INTO group_chats (name, description, owner_id)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`
+	err := p.DbConn.QueryRow(query, name, description, ownerID).Scan(&groupID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create group chat: %w", err)
+	}
+
+	// Owner joins as an admin
+	err = p.JoinGroupChat(ownerID, groupID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to join group chat as owner: %w", err)
+	}
+
+	return groupID, nil
+}
+
+// JoinGroupChat adds a user to a group chat
+func (p *Postgres) JoinGroupChat(userID, groupID int) error {
+	query := `
+		INSERT INTO group_members (group_id, user_id, role)
+		VALUES ($1, $2, 'member')
+		ON CONFLICT (group_id, user_id) DO NOTHING
+	`
+	// If it was already there, no problem. If owner, we might want to set role to owner.
+	// But the migration says role defaults to 'member'.
+	_, err := p.DbConn.Exec(query, groupID, userID)
+	return err
+}
+
+// LeaveGroupChat removes a user from a group chat
+func (p *Postgres) LeaveGroupChat(userID, groupID int) error {
+	query := `DELETE FROM group_members WHERE group_id = $1 AND user_id = $2`
+	_, err := p.DbConn.Exec(query, groupID, userID)
+	return err
+}
+
+// GetGroupChatMessages retrieves decrypted messages for a group
+func (p *Postgres) GetGroupChatMessages(groupID int) ([]factory.Message, error) {
+	key, err := getEncryptionKey()
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT m.id, m.sender_id, u.username, m.content, m.sent_at
+		FROM messages m
+		JOIN users u ON u.id = m.sender_id
+		WHERE m.chat_type = 'group' AND m.chat_id = $1
+		ORDER BY m.sent_at ASC
+	`
+	rows, err := p.DbConn.Query(query, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []factory.Message
+	for rows.Next() {
+		var msg factory.Message
+		var encrypted string
+		var sentAt time.Time
+		if err := rows.Scan(&msg.ID, &msg.SenderID, &msg.SenderName, &encrypted, &sentAt); err != nil {
+			return nil, err
+		}
+
+		decrypted, _ := utils.DecryptAES256(encrypted, key)
+		msg.Content = decrypted
+		msg.ChatID = groupID
+		msg.SentAt = sentAt.Format("2006-01-02 15:04:05")
+		msg.ChatType = "group"
+		messages = append(messages, msg)
+	}
+
+	p.fetchReactionsForMessages(messages)
+	return messages, nil
+}
+
+// SendGroupMessage encrypts and stores a message for a group
+func (p *Postgres) SendGroupMessage(senderID, groupID int, message, sessionID string) error {
+	key, err := getEncryptionKey()
+	if err != nil {
+		return err
+	}
+
+	encrypted, err := utils.EncryptAES256(message, key)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		INSERT INTO messages (sender_id, chat_type, chat_id, content, sent_at)
+		VALUES ($1, 'group', $2, $3, NOW())
+	`
+	_, err = p.DbConn.Exec(query, senderID, groupID, encrypted)
+	if err != nil {
+		return err
+	}
+
+	// Get sender name for Redis
+	var senderName string
+	p.DbConn.QueryRow("SELECT username FROM users WHERE id = $1", senderID).Scan(&senderName)
+
+	// Publish to Redis
+	// Format: <sessionID>|<senderName>|<timestamp>|<message>
+	payload := fmt.Sprintf("%s|%s|%s|%s", sessionID, senderName, time.Now().Format("2006-01-02 15:04:05"), message)
+	channel := fmt.Sprintf("group:%d", groupID)
+	err = redis.NewRedis(nil).Client.Publish(context.Background(), channel, payload).Err()
+	if err != nil {
+		return err
+	}
+
+	// Notify other members
+	var groupName string
+	p.DbConn.QueryRow("SELECT name FROM group_chats WHERE id = $1", groupID).Scan(&groupName)
+
+	rows, err := p.DbConn.Query(`
+		SELECT u.username FROM users u
+		JOIN group_members gm ON u.id = gm.user_id
+		WHERE gm.group_id = $1 AND u.id != $2
+	`, groupID, senderID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var memberName string
+			if err := rows.Scan(&memberName); err == nil {
+				notif := fmt.Sprintf("GROUP_MSG %s|%s", senderName, groupName)
+				// Use a different channel prefix for notifications
+				notifChan := "notify:" + strings.ToLower(memberName)
+				redis.NewRedis(nil).Client.Publish(context.Background(), notifChan, notif)
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetGroupChatID returns the ID of a group chat by name
+func (p *Postgres) GetGroupChatID(name string) (int, error) {
+	var id int
+	err := p.DbConn.QueryRow("SELECT id FROM group_chats WHERE LOWER(name) = LOWER($1)", name).Scan(&id)
+	return id, err
+}
+
+// GetUserGroupChats returns all groups a user belongs to
+func (p *Postgres) GetUserGroupChats(userID int) ([]factory.GroupChat, error) {
+	query := `
+		SELECT g.id, g.name, g.description, g.owner_id, g.is_global
+		FROM group_chats g
+		JOIN group_members gm ON g.id = gm.group_id
+		WHERE gm.user_id = $1
+	`
+	rows, err := p.DbConn.Query(query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []factory.GroupChat
+	for rows.Next() {
+		var g factory.GroupChat
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.OwnerID, &g.IsGlobal); err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	return groups, nil
+}
+
+// GetGlobalChatID returns the ID of the global chat, creating it if necessary
+func (p *Postgres) GetGlobalChatID() (int, error) {
+	var id int
+	err := p.DbConn.QueryRow("SELECT id FROM group_chats WHERE is_global = TRUE").Scan(&id)
+	if err == sql.ErrNoRows {
+		query := `
+			INSERT INTO group_chats (name, description, is_global)
+			VALUES ('Global', 'The global chat room for everyone', TRUE)
+			RETURNING id
+		`
+		err = p.DbConn.QueryRow(query).Scan(&id)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	return id, err
+}
+
+func (p *Postgres) IsGroupOwner(userID, groupID int) (bool, error) {
+	var ownerID int
+	err := p.DbConn.QueryRow("SELECT owner_id FROM group_chats WHERE id = $1", groupID).Scan(&ownerID)
+	if err != nil {
+		return false, err
+	}
+	return ownerID == userID, nil
+}
+
+func (p *Postgres) AddGroupMember(userID, groupID int) error {
+	return p.JoinGroupChat(userID, groupID)
+}
+
+func (p *Postgres) RemoveGroupMember(userID, groupID int) error {
+	return p.LeaveGroupChat(userID, groupID)
+}
+
+func (p *Postgres) AddReaction(messageID, userID int, emoji string) error {
+	query := `
+		INSERT INTO reactions (message_id, user_id, emoji)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (message_id, user_id, emoji) DO NOTHING
+	`
+	_, err := p.DbConn.Exec(query, messageID, userID, emoji)
+	return err
+}
+
+func (p *Postgres) GetLastMessageID(chatType string, chatID int) (int, error) {
+	var id int
+	query := `SELECT id FROM messages WHERE chat_type = $1 AND chat_id = $2 ORDER BY sent_at DESC LIMIT 1`
+	err := p.DbConn.QueryRow(query, chatType, chatID).Scan(&id)
+	return id, err
+}
+
+func (p *Postgres) fetchReactionsForMessages(messages []factory.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
+	ids := make([]int, len(messages))
+	msgMap := make(map[int]*factory.Message)
+	for i := range messages {
+		ids[i] = messages[i].ID
+		messages[i].Reactions = make(map[string]string)
+		msgMap[messages[i].ID] = &messages[i]
+	}
+
+	// Simple way to handle IN clause with lib/pq
+	query := `
+		SELECT r.message_id, u.username, r.emoji
+		FROM reactions r
+		JOIN users u ON r.user_id = u.id
+		WHERE r.message_id = ANY($1)
+	`
+	rows, err := p.DbConn.Query(query, pq.Array(ids))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var msgID int
+		var username, emoji string
+		if err := rows.Scan(&msgID, &username, &emoji); err == nil {
+			if msg, ok := msgMap[msgID]; ok {
+				msg.Reactions[username] = emoji
+			}
+		}
+	}
 }

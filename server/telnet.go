@@ -10,7 +10,6 @@ import (
 	"termchat/factory"
 	"termchat/pkg/users"
 	"time"
-
 )
 
 // notifyChannel returns the per-user Redis channel for incoming notifications.
@@ -28,7 +27,7 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 	sessionID := fmt.Sprintf("%s-%d", conn.RemoteAddr().String(), time.Now().UnixNano())
 
 	conn.Write([]byte("Welcome to TermChat CLI over Telnet!\n"))
-	conn.Write([]byte("Commands: /register <email> <username> <password>, /login <email> <password>, /chat <user>, /tempchat <user>, /send <user> <message>, /room, /search <prefix>, /exit\n"))
+	conn.Write([]byte("Commands: /register <email> <username> <password>, /login <email> <password>, /chat <user>, /tempchat <user>, /send <user> <message>, /room, /search <prefix>, /create <name>, /join <name>, /leave <name>, /group <name>, /global, /kick <group> <user>, /invite <group> <user>, /exit\n"))
 
 	reader := bufio.NewReader(conn)
 	var currentUser *factory.User
@@ -150,17 +149,26 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				conn.Write([]byte("ERR AUTH not_logged_in\n"))
 				continue
 			}
-			rooms, err := srv.message.GetChatPartners(currentUser.ID)
+			partners, err := srv.message.GetChatPartners(int(currentUser.ID))
 			if err != nil {
-				conn.Write([]byte(fmt.Sprintf("ERR ROOM %s\n", err)))
+				conn.Write([]byte(fmt.Sprintf("ERR ROOM partners_failed %s\n", err)))
 				continue
 			}
-			if len(rooms) == 0 {
+			groups, err := srv.message.GetUserGroupChats(int(currentUser.ID))
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR ROOM groups_failed %s\n", err)))
+				continue
+			}
+
+			if len(partners) == 0 && len(groups) == 0 {
 				conn.Write([]byte("ROOM NONE\n"))
 				continue
 			}
-			for _, name := range rooms {
-				conn.Write([]byte(fmt.Sprintf("ROOM %s\n", name)))
+			for _, name := range partners {
+				conn.Write([]byte(fmt.Sprintf("ROOM @%s\n", name)))
+			}
+			for _, g := range groups {
+				conn.Write([]byte(fmt.Sprintf("ROOM %s\n", g.Name)))
 			}
 
 		// =====================================================
@@ -177,12 +185,14 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				continue
 			}
 			receiver, msg := parts[0], parts[1]
-			if err := srv.message.SendPersonalMessage(currentUser.Name, receiver, msg); err != nil {
+			if err := srv.message.SendPersonalMessage(currentUser.Name, receiver, msg, ""); err != nil {
 				conn.Write([]byte(fmt.Sprintf("ERR SEND %s\n", err)))
 			} else {
 				payload := fmt.Sprintf("MSG %s", currentUser.Name)
 				_ = srv.redis.Client.Publish(context.Background(), notifyChannel(receiver), payload).Err()
 				conn.Write([]byte("OK SEND\n"))
+				// Optional: show a banner on receiver side
+				_ = srv.redis.Client.Publish(context.Background(), notifyChannel(receiver), fmt.Sprintf("MSG %s", currentUser.Name)).Err()
 			}
 
 		// =====================================================
@@ -223,7 +233,8 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				continue
 			}
 			for _, m := range messages {
-				conn.Write([]byte(fmt.Sprintf("HIST %s|%s|%s\n", m.SentAt, m.SenderName, m.Content)))
+				reactionsStr := formatReactions(m.Reactions)
+				conn.Write([]byte(fmt.Sprintf("HIST %s|%s|%s|%s\n", m.SentAt, m.SenderName, m.Content, reactionsStr)))
 			}
 			conn.Write([]byte("OK CHAT READY\n"))
 
@@ -288,21 +299,27 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 				if msgLine == "" {
 					continue
 				}
+				senderName := currentUser.Name
 				if msgLine == "/exit" {
 					safeClose()
 					break
 				}
 
-				senderName := currentUser.Name
-				if err := srv.message.SendPersonalMessage(senderName, chatPartner, msgLine); err != nil {
-					conn.Write([]byte(fmt.Sprintf("ERR CHAT send_failed %s\n", err)))
+				if strings.HasPrefix(msgLine, "/react ") {
+					emoji := strings.TrimPrefix(msgLine, "/react ")
+					id, err := srv.message.GetLastMessageID("personal", chatID)
+					if err == nil {
+						srv.message.AddReaction(id, int(currentUser.ID), emoji)
+						payload := fmt.Sprintf("%s|%s|REACTION|%s", mySessionID, senderName, emoji)
+						_ = srv.redis.Client.Publish(ctx, channelName, payload).Err()
+					}
 					continue
 				}
 
-				// Publish with session ID prefix so the goroutine above can skip it
-				ts := time.Now().Format("2006-01-02 15:04:05")
-				payload := fmt.Sprintf("%s|%s|%s|%s", mySessionID, senderName, ts, msgLine)
-				_ = srv.redis.Client.Publish(ctx, channelName, payload).Err()
+				if err := srv.message.SendPersonalMessage(senderName, chatPartner, msgLine, mySessionID); err != nil {
+					conn.Write([]byte(fmt.Sprintf("ERR CHAT send_failed %s\n", err)))
+					continue
+				}
 			}
 
 		ChatExit:
@@ -433,8 +450,193 @@ func handleTelnetClient(conn net.Conn, srv *Server) {
 			}
 
 		// =====================================================
-		// UNKNOWN
+		// CREATE GROUP
 		// =====================================================
+		case "/create":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			parts := strings.SplitN(argLine, " ", 2)
+			name := parts[0]
+			desc := ""
+			if len(parts) > 1 {
+				desc = parts[1]
+			}
+			if name == "" {
+				conn.Write([]byte("ERR CREATE missing_name\n"))
+				continue
+			}
+			id, err := srv.message.CreateGroupChat(name, desc, int(currentUser.ID))
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR CREATE %s\n", err)))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("OK CREATE %s %d\n", name, id)))
+				// Auto-enter
+				handleGroupChat(conn, srv, name, id, currentUser, sessionID, reader)
+			}
+
+		// =====================================================
+		// JOIN GROUP
+		// =====================================================
+		case "/join":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			name := strings.TrimSpace(argLine)
+			id, err := srv.message.GetGroupChatID(name)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR JOIN %s\n", err)))
+				continue
+			}
+			if err := srv.message.JoinGroupChat(int(currentUser.ID), id); err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR JOIN %s\n", err)))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("OK JOIN %s\n", name)))
+			}
+
+		// =====================================================
+		// LEAVE GROUP
+		// =====================================================
+		case "/leave":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			name := strings.TrimSpace(argLine)
+			id, err := srv.message.GetGroupChatID(name)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR LEAVE %s\n", err)))
+				continue
+			}
+			if err := srv.message.LeaveGroupChat(int(currentUser.ID), id); err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR LEAVE %s\n", err)))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("OK LEAVE %s\n", name)))
+			}
+
+		// =====================================================
+		// KICK FROM GROUP (Owner only)
+		// =====================================================
+		case "/kick":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			parts := strings.Fields(argLine)
+			if len(parts) != 2 {
+				conn.Write([]byte("ERR KICK invalid_arguments\n"))
+				continue
+			}
+			groupName, targetUser := parts[0], parts[1]
+			groupID, err := srv.message.GetGroupChatID(groupName)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR KICK group_not_found %s\n", err)))
+				continue
+			}
+			isOwner, _ := srv.message.IsGroupOwner(int(currentUser.ID), groupID)
+			if !isOwner {
+				conn.Write([]byte("ERR KICK not_authorized\n"))
+				continue
+			}
+			target, err := srv.user.GetUserByUsername(targetUser)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR KICK user_not_found %s\n", err)))
+				continue
+			}
+			if err := srv.message.RemoveGroupMember(int(target.ID), groupID); err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR KICK %s\n", err)))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("OK KICK %s %s\n", groupName, targetUser)))
+				// Notify the user they were kicked
+				_ = srv.redis.Client.Publish(context.Background(), notifyChannel(targetUser), fmt.Sprintf("KICK %s", groupName)).Err()
+			}
+
+		// =====================================================
+		// INVITE TO GROUP (Owner only)
+		// =====================================================
+		case "/invite":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			parts := strings.Fields(argLine)
+			if len(parts) != 2 {
+				conn.Write([]byte("ERR INVITE invalid_arguments\n"))
+				continue
+			}
+			groupName, targetUser := parts[0], parts[1]
+			groupID, err := srv.message.GetGroupChatID(groupName)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR INVITE group_not_found %s\n", err)))
+				continue
+			}
+			isOwner, _ := srv.message.IsGroupOwner(int(currentUser.ID), groupID)
+			if !isOwner {
+				conn.Write([]byte("ERR INVITE not_authorized\n"))
+				continue
+			}
+			target, err := srv.user.GetUserByUsername(targetUser)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR INVITE user_not_found %s\n", err)))
+				continue
+			}
+			if err := srv.message.AddGroupMember(int(target.ID), groupID); err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR INVITE %s\n", err)))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("OK INVITE %s %s\n", groupName, targetUser)))
+				// Notify the user they were invited
+				_ = srv.redis.Client.Publish(context.Background(), notifyChannel(targetUser), fmt.Sprintf("INVITE %s", groupName)).Err()
+			}
+
+		// =====================================================
+		// GLOBAL ROOM
+		// =====================================================
+		case "/global":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			id, err := srv.message.GetGlobalChatID()
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR GLOBAL %s\n", err)))
+				continue
+			}
+			handleGroupChat(conn, srv, "Global", id, currentUser, sessionID, reader)
+
+		// =====================================================
+		// GROUP CHAT
+		// =====================================================
+		case "/group":
+			if currentUser == nil {
+				conn.Write([]byte("ERR AUTH not_logged_in\n"))
+				continue
+			}
+			name := strings.TrimSpace(argLine)
+			id, err := srv.message.GetGroupChatID(name)
+			if err != nil {
+				conn.Write([]byte(fmt.Sprintf("ERR GROUP %s\n", err)))
+				continue
+			}
+			handleGroupChat(conn, srv, name, id, currentUser, sessionID, reader)
+
+		// =====================================================
+		// REACTIONS
+		// =====================================================
+		case "/react":
+			if currentUser == nil {
+				continue
+			}
+			emoji := strings.TrimSpace(argLine)
+			if emoji == "" {
+				continue
+			}
+			// Broadcast to the channel we're in?
+			// Need a way to know the current chat state from the reader loop.
+			// The reader loop is inside /chat or /group or /tempchat.
+			// Wait, the main loop is for generic commands.
+			// Let's add /react to the specific chat loops.
 		default:
 			conn.Write([]byte("ERR UNKNOWN_COMMAND\n"))
 		}
@@ -448,4 +650,120 @@ func makeTempChatChannel(u1, u2 string) string {
 		return fmt.Sprintf("tempchat:%s:%s", a, b)
 	}
 	return fmt.Sprintf("tempchat:%s:%s", b, a)
+}
+
+func formatReactions(reactions map[string]string) string {
+	if len(reactions) == 0 {
+		return ""
+	}
+	counts := make(map[string]int)
+	for _, emoji := range reactions {
+		counts[emoji]++
+	}
+	var res []string
+	for emoji, count := range counts {
+		if count > 1 {
+			res = append(res, fmt.Sprintf("%s %d", emoji, count))
+		} else {
+			res = append(res, emoji)
+		}
+	}
+	return "{" + strings.Join(res, " ") + "}"
+}
+
+func handleGroupChat(conn net.Conn, srv *Server, groupName string, groupID int, currentUser *factory.User, sessionID string, reader *bufio.Reader) {
+	conn.Write([]byte(fmt.Sprintf("OK GROUP %s %d\n", groupName, groupID)))
+
+	// Fetch history
+	messages, err := srv.message.GetGroupChatMessages(groupID)
+	if err != nil {
+		conn.Write([]byte(fmt.Sprintf("ERR GROUP history_failed %s\n", err)))
+		return
+	}
+	for _, m := range messages {
+		reactionsStr := formatReactions(m.Reactions)
+		conn.Write([]byte(fmt.Sprintf("HIST %s|%s|%s|%s\n", m.SentAt, m.SenderName, m.Content, reactionsStr)))
+	}
+	conn.Write([]byte("OK GROUP READY\n"))
+
+	channelName := fmt.Sprintf("group:%d", groupID)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pubsub := srv.redis.Client.Subscribe(ctx, channelName)
+	defer pubsub.Close()
+	msgChan := pubsub.Channel()
+
+	done := make(chan struct{})
+	var once sync.Once
+	safeClose := func() { once.Do(func() { close(done) }) }
+
+	mySessionID := sessionID
+
+	// Forward messages
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case msg, ok := <-msgChan:
+				if !ok {
+					return
+				}
+				// Format: <sender>|<ts>|<content>
+				// Wait, I didn't include sessionID in the Redis payload for groups in SendGroupMessage
+				// Let's go back and fix that first to avoid echo.
+				segs := strings.SplitN(msg.Payload, "|", 4)
+				if len(segs) == 4 {
+					fromSess, sender, ts, content := segs[0], segs[1], segs[2], segs[3]
+					if fromSess == mySessionID {
+						continue
+					}
+					conn.Write([]byte(fmt.Sprintf("MSG %s|%s|%s\n", sender, ts, content)))
+				}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-done:
+			goto GroupExit
+		default:
+		}
+
+		msgLine, err := reader.ReadString('\n')
+		if err != nil {
+			safeClose()
+			break
+		}
+		msgLine = strings.TrimSpace(msgLine)
+		if msgLine == "" {
+			continue
+		}
+		senderName := currentUser.Name
+		if msgLine == "/exit" {
+			safeClose()
+			break
+		}
+
+		if strings.HasPrefix(msgLine, "/react ") {
+			emoji := strings.TrimPrefix(msgLine, "/react ")
+			id, err := srv.message.GetLastMessageID("group", groupID)
+			if err == nil {
+				srv.message.AddReaction(id, int(currentUser.ID), emoji)
+				payload := fmt.Sprintf("%s|%s|REACTION|%s", mySessionID, senderName, emoji)
+				_ = srv.redis.Client.Publish(ctx, channelName, payload).Err()
+			}
+			continue
+		}
+
+		if err := srv.message.SendGroupMessage(int(currentUser.ID), groupID, msgLine, mySessionID); err != nil {
+			conn.Write([]byte(fmt.Sprintf("ERR GROUP send_failed %s\n", err)))
+			continue
+		}
+	}
+
+GroupExit:
+	conn.Write([]byte("OK GROUP EXIT\n"))
 }

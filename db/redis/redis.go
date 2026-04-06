@@ -28,11 +28,17 @@ func initialize(envType *string) *redis.Client {
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
+		redisURL = viper.GetString("redis_url")
+	}
+	if redisURL == "" {
+		// Fallback to old key
 		redisURL = viper.GetString("redis")
 	}
 
 	if redisURL == "" {
-		panic("REDIS_URL not provided")
+		// Default to localhost if nothing provided to avoid panic in dev
+		redisURL = "redis://localhost:6379"
+		slog.Warn("REDIS_URL not provided, defaulting to localhost:6379")
 	}
 
 	opt, err := redis.ParseURL(redisURL)

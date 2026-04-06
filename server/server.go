@@ -50,6 +50,7 @@ func Run(env *string) {
 		level = slog.LevelDebug
 	}
 	viper.AutomaticEnv()
+	viper.SetEnvPrefix("TERMCHAT") // Optional: allow TERMCHAT_POSTGRES_URL
 	viper.AddConfigPath(".")
 	err := viper.ReadInConfig()
 	if err != nil {

@@ -88,6 +88,8 @@ func Render(m Model) string {
 		return renderChatScreen(m, "tempchat", false)
 	case stateHistory:
 		return renderChatScreen(m, "chat", true)
+	case stateGroup:
+		return renderChatScreen(m, "group", true)
 	}
 	return ""
 }
@@ -247,6 +249,15 @@ func renderSidebar(m Model, w int) string {
 			case "msg":
 				icon = lipgloss.NewStyle().Foreground(colorAccent).Render("◆")
 				label = styleNotifDim.Render(fmt.Sprintf(" msg from @%s", n.from))
+			case "group_msg":
+				icon = styleAccent.Render("▸")
+				label = styleNotifDim.Render(fmt.Sprintf(" @%s sent group msg", n.from))
+			case "invite":
+				icon = styleOK.Render("★")
+				label = styleNotifDim.Render(fmt.Sprintf(" invite to %s", n.from))
+			case "kick":
+				icon = styleDanger.Render("✖")
+				label = styleNotifDim.Render(fmt.Sprintf(" kicked from %s", n.from))
 			default:
 				icon = styleMuted.Render("◆")
 				label = styleNotifDim.Render(" @" + n.from)
@@ -395,7 +406,15 @@ func renderChatScreen(m Model, chatType string, withHistory bool) string {
 func renderChatTopBar(m Model, chatType string, withHistory bool) string {
 	var badge, status string
 
-	if withHistory {
+	if chatType == "group" {
+		badge = lipgloss.NewStyle().
+			Background(colorAccent).
+			Foreground(colorBg).
+			Bold(true).
+			Padding(0, 1).
+			Render("room")
+		status = styleOK.Render("● group")
+	} else if withHistory {
 		badge = lipgloss.NewStyle().
 			Background(colorOrange).
 			Foreground(colorBg).
@@ -417,8 +436,13 @@ func renderChatTopBar(m Model, chatType string, withHistory bool) string {
 		status = styleOK.Render("● live")
 	}
 
+	titlePrefix := "@"
+	if chatType == "group" {
+		titlePrefix = "#"
+	}
+
 	left := styleAccent.Render("⬡ TermChat  ›  ") +
-		stylePurple.Render("@"+m.chatPartner) +
+		stylePurple.Render(titlePrefix+m.chatPartner) +
 		"  " + badge
 
 	right := styleMuted.Render(time.Now().Format("15:04")) + "  " + status
@@ -452,10 +476,15 @@ func formatChatMessage(msg ChatMessage, currentUser string) string {
 		if msg.timestamp != "" {
 			ts = styleHistTs.Render(" " + shortTimestamp(msg.timestamp))
 		}
-		return fmt.Sprintf("%s%s  %s",
+		reactions := ""
+		if msg.reactions != "" {
+			reactions = " " + styleOrange.Render(msg.reactions)
+		}
+		return fmt.Sprintf("%s%s  %s%s",
 			nameStyle.Render(msg.sender),
 			ts,
 			styleMuted.Render(msg.content),
+			reactions,
 		)
 	}
 

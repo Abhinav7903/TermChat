@@ -130,6 +130,29 @@ func (p *Postgres) DeleteUser(email string) error {
 	return nil
 }
 
+// GetUserByUsername retrieves a user by username
+func (p *Postgres) GetUserByUsername(username string) (factory.User, error) {
+	var user factory.User
+	var createdAt time.Time
+
+	query := `
+		SELECT id, email, username, created_at
+		FROM users WHERE username = $1
+	`
+	err := p.DbConn.QueryRow(query, username).Scan(
+		&user.ID, &user.Email, &user.Name, &createdAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return factory.User{}, fmt.Errorf("user not found")
+		}
+		return factory.User{}, fmt.Errorf("get user by username query failed: %w", err)
+	}
+
+	user.Created = createdAt.Format(time.RFC3339)
+	return user, nil
+}
+
 // search username it will give auto suggestion
 func (p *Postgres) SearchUsersByName(name string) ([]factory.User, error) {
 	query := `

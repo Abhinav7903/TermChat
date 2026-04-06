@@ -1,0 +1,18 @@
+{
+  "name": "Dracula",
+  "bg": "#282a36",
+  "surface": "#44475a",
+  "border": "#6272a4",
+  "accent": "#bd93f9",
+  "accent2": "#50fa7b",
+  "muted": "#6272a4",
+  "danger": "#ff5555",
+  "self": "#8be9fd",
+  "other": "#50fa7b",
+  "system": "#f1fa8c",
+  "white": "#f8f8f2",
+  "purple": "#ff79c6",
+  "history": "#44475a",
+  "orange": "#ffb86c",
+  "notif": "#ffb86c"
+}

@@ -16,23 +16,21 @@
   - Full Bubble Tea TUI client with Lip Gloss styling
   - Dark theme with colored panels, badges, and live indicators
   - Keyboard-driven with command history navigation
-- 🔐 **Secure Authentication**
+  - **Vim-like scrolling** (Ctrl+K/J) and **Dynamic Themes**
+- 👥 **Advanced Communities**
+  - **Group Chats** with `/create`, `/join`, and `/leave`
+  - **Global Room** (`/global`) for all users to connect instantly
+  - **Owner Controls** for kicking and inviting members
+- 🔐 **Security**
   - Register & login with email + password
   - Password hashing with **bcrypt**
-- 🔒 **Encrypted Messages**
-  - AES-256-GCM message storage
+  - **AES-256-GCM** message storage at rest
 - ⚡ **Real-Time Communication**
   - Persistent chat with history via **PostgreSQL** + **Redis pub/sub**
-  - Ephemeral temp chats with no DB storage
-  - One-off direct message sending
-- 🔔 **Live Notifications**
-  - Instant alerts when someone starts a `/chat` or `/tempchat` with you
-  - Terminal bell sound on notification
-  - Per-user Redis notification channels — zero polling
-- 👥 **Chat Types**
-  - `/chat` — persistent one-to-one with scrollable history
-  - `/tempchat` — ephemeral real-time, nothing saved
-  - `/send` — fire-and-forget direct message
+  - **Rich Notifications**: Native terminal bell (`\a`) and real-time popups
+  - Message **Reactions** using `/react <emoji>`
+- ⌨️ **Shell Integration**
+  - Pipe terminal output directly to chat using `--mode send`
 - 🔎 **Search & Discovery**
   - Search users by name prefix
   - Room/partner list on login
@@ -42,23 +40,16 @@
 ## 📂 Project Structure
 
 ```text
-cmd/                 # Entry point (main.go)
-client/              # Bubble Tea TUI client
-  client.go          #   Program entrypoint
-  model.go           #   State machine & server message parsing
-  views.go           #   Lip Gloss layouts & rendering
-  tcp.go             #   TCP connect / read / write helpers
-db/
-  migrations/        # SQL migrations
-  postgres/          # PostgreSQL connection & queries
-  redis/             # Redis client
-factory/             # Data models (User, Message)
-pkg/
-  message/           # Message repository interface
-  users/             # User repository interface & utils
-server/              # HTTP & TCP server logic
-  telnet.go          #   TCP command handler & Redis pub/sub
-utils/               # Encryption utilities
+/
+├── cmd/                # Entry point (main.go)
+├── client/             # Bubble Tea TUI client & CLI mode
+├── server/             # HTTP & TCP server logic
+├── db/                 # Database migrations, Postgres & Redis drivers
+├── pkg/                # Repository interfaces & domain logic
+├── factory/            # Data models
+├── scripts/            # Helper scripts (key generation, etc.)
+├── themes/             # JSON theme files
+└── utils/              # Encryption & encoding utilities
 ```
 
 ---
@@ -74,49 +65,39 @@ utils/               # Encryption utilities
 ### ⚙️ Setup
 
 1. **Clone the repo**
-
    ```sh
    git clone https://github.com/Abhinav7903/TermChat.git
    cd TermChat
    ```
 
 2. **Configure environment**
+   TermChat looks for a `term_chat_dev.json` file in the root or `$HOME/.sck/`.
 
-   Place config files in `$HOME/.sck/`:
-
-   ```
-   $HOME/.sck/
-     ├── term_chat_dev.json
-     ├── term_chat_staging.json
-     └── term_chat_prod.json
+   **Step A: Create config**
+   ```sh
+   cp term_chat_dev.json.example term_chat_dev.json
    ```
 
-   Example `term_chat_dev.json`:
+   **Step B: Generate encryption key**
+   ```sh
+   # Run the provided generator script
+   go run scripts/gen_key.go
+   # Paste the output into your term_chat_dev.json
+   ```
 
-   ```json
-   {
-     "postgres_url": "postgres://user:password@localhost:5432/term?sslmode=disable",
-     "redis_url": "localhost:6379",
-     "encryption_key": "base64-encoded-32-byte-key"
-   }
+   **Alternative: Environment Variables**
+   ```sh
+   export POSTGRES_URL="postgres://user:pass@localhost:5432/term?sslmode=disable"
+   export REDIS_URL="redis://localhost:6379"
+   export ENCRYPTION_KEY="your-generated-base64-key"
    ```
 
 3. **Run database migrations**
-
    ```sh
-   migrate -database "postgres://user:pass@localhost:5432/term?sslmode=disable" \
-           -path db/migrations up
+   migrate -database "$POSTGRES_URL" -path db/migrations up
    ```
 
-4. **Start dependencies**
-
-   ```sh
-   systemctl start postgresql
-   systemctl start redis
-   ```
-
-5. **Build**
-
+4. **Build**
    ```sh
    go build -o termchat ./cmd/main.go
    ```
@@ -126,128 +107,57 @@ utils/               # Encryption utilities
 ## 🖥️ Running
 
 ### Server
-
 ```sh
 ./termchat --env dev
 ```
 
-- TCP chat server: **:9000**
-- HTTP API: **:8080** (dev) / **:8194** (prod)
-
-### TUI Client (recommended)
-
+### TUI Client (interactive)
 ```sh
 ./termchat --mode client --host localhost --port 9000
 ```
 
-Or with `go run`:
-
+### CLI Send Mode (pipe output)
 ```sh
-go run ./cmd/main.go --mode client --host localhost --port 9000
-```
-
-### Raw Telnet (manual testing)
-
-```sh
-telnet localhost 9000
+echo "Server logs: $(date)" | ./termchat --mode send --email user@ex.com --pass 123 --to @admin
 ```
 
 ---
 
-## 💬 Client Usage
-
-### Auth Screen
-
-On launch you'll see the login form. Use `[Tab]` or `[↑/↓]` to move between fields, `[Enter]` to submit, and `[F1]` to toggle between **Sign In** and **Create Account**.
-
-### Main Dashboard
-
-After login the dashboard shows:
-- **Sidebar** — your chat partners (rooms), incoming notifications
-- **Activity panel** — scrollable message/command output
-- **Command bar** — type any command and press `[Enter]`
-
-### Chat Screen (`/chat`)
-
-Opens a persistent chat with full history. History messages appear dimmed; a `── live ──` divider marks where live messages begin. Orange border indicates messages are saved to the database.
-
-### TempChat Screen (`/tempchat`)
-
-Ephemeral real-time chat. Purple border, `● live` indicator. Nothing is saved — messages disappear when the session ends.
-
----
-
-## 📋 Command Reference
+## 📋 Command Reference (Inside TUI)
 
 | Command | Description |
 |---------|-------------|
-| `/register <email> <username> <password>` | Create a new account |
-| `/login <email> <password>` | Sign in |
-| `/room` | Refresh your chat partners list |
-| `/chat <username>` | Open persistent chat with history + live messages |
-| `/tempchat <username>` | Start ephemeral real-time chat (not saved) |
-| `/send <username> <message>` | Send a one-off direct message |
-| `/search <prefix>` | Search users by name |
-| `/clear` | Clear messages and notifications |
+| `/create <name>` | Create a new group chat |
+| `/join <name>` | Join an existing group |
+| `/group <name>` | Switch to a group chat |
+| `/global` | Jump into the global community room |
+| `/chat <user>` | Open private chat with history |
+| `/tempchat <user>` | Ephemeral chat (no history) |
+| `/react <emoji>` | React to the last message in current chat |
+| `/theme <path>` | Load a `.json` theme file |
+| `/invite <grp> <usr>` | (Owner) Invite user to group |
+| `/kick <grp> <usr>` | (Owner) Kick user from group |
+| `/clear` | Clear dashboard and notifications |
 | `/exit` | Leave current chat or disconnect |
-| `/help` | Show command list in the activity panel |
-| `[↑/↓]` | Navigate command history |
-| `[F1]` | Toggle login / register on auth screen |
-| `[Ctrl+C]` | Quit |
+| `Ctrl+K/J` | Scroll chat history |
 
 ---
 
-## 🔔 Notification System
+## 💡 Tips & Tricks
 
-TermChat notifies you in real time when:
-- Another user opens a `/chat` with you → `◆ @user wants to /chat`
-- Another user opens a `/tempchat` with you → `◆ @user /tempchat`
-- Someone sends you a `/send` message → `◆ msg from @user`
-
-Notifications appear in the sidebar and the top bar shows a `🔔 N` badge. Your terminal will also ring the bell (`\a`) so you notice even if the window is in the background.
-
-Notifications are delivered via a per-user Redis channel (`notify:<username>`) subscribed immediately on login.
+- **Message Reactions**: Use `/react 👍` while inside a chat to attach an emoji to the most recent message. These are saved and visible to everyone in the history.
 
 ---
 
-## 🔐 Security
+## 🛠️ Troubleshooting
 
-- Passwords: **bcrypt** hashing
-- Messages: **AES-256-GCM** encryption at rest
-- Session deduplication: unique session ID per TCP connection prevents message echo across multiple open tabs
+### "pq: password authentication failed for user ..."
+Ensure `POSTGRES_URL` is set correctly in your JSON config or environment variables. By default, Postgres attempts to connect using your OS username.
 
----
-
-## 🌐 Tailscale Deployment (Recommended)
-
-Run TermChat securely across machines using [Tailscale](https://tailscale.com).
-
-```sh
-# Install Tailscale on both machines
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Start the server
-./termchat --env dev
-
-# Find your server's Tailscale IP
-tailscale ip -4
-# → e.g. 100.72.55.34
-
-# Connect from another machine
-./termchat --mode client --host 100.72.55.34 --port 9000
-```
-
-With MagicDNS enabled:
-
-```sh
-./termchat --mode client --host myserver.tailnet-name.ts.net --port 9000
-```
-
-✅ No open ports. No public exposure. Works over any network.
+### "Config File Not Found"
+Copy the example file: `cp term_chat_dev.json.example term_chat_dev.json`.
 
 ---
 
 ## 📜 License
-
 MIT License © 2025 [Abhinav Ashish](https://github.com/Abhinav7903)

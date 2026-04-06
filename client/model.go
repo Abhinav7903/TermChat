@@ -20,6 +20,7 @@ const (
 	stateMenu
 	stateChat    // /tempchat — ephemeral, no history
 	stateHistory // /chat    — persistent, with history + live
+	stateGroup   // /group   — persistent group, with history + live
 	stateSearch  // showing search results
 )
 
@@ -34,6 +35,7 @@ type ChatMessage struct {
 	sender    string
 	timestamp string
 	content   string
+	reactions string
 	isSelf    bool
 	isSystem  bool
 	isHistory bool // came from HIST (dimmed display)
@@ -318,6 +320,60 @@ func (m Model) handleServerLine(raw string) Model {
 				m.msgInput.Focus()
 				m.dismissNotification(partner)
 			}
+
+		case "GROUP":
+			if len(parts) < 3 {
+				return m
+			}
+			// Use original line to extract name properly if it has spaces
+			// OK GROUP <name> <id>
+			fullLine := strings.Join(parts[2:], " ")
+
+			switch parts[2] {
+			case "READY":
+				m.chatReady = true
+				m.messages = append(m.messages, ChatMessage{
+					isSystem: true,
+					content:  fmt.Sprintf("── live room %s ──────────────────────────────", m.chatPartner),
+				})
+				m.banner = fmt.Sprintf("✓ Room %s — /exit to leave", m.chatPartner)
+				m.bannerOK = true
+			case "EXIT":
+				m.messages = append(m.messages, ChatMessage{
+					isSystem: true,
+					content:  fmt.Sprintf("Left room %s", m.chatPartner),
+				})
+				m.state = stateMenu
+				m.chatPartner = ""
+				m.chatReady = false
+				m.msgInput.Focus()
+			default:
+				// Extract name and id from fullLine
+				// We assume last field is ID
+				lastSpace := strings.LastIndex(fullLine, " ")
+				name := fullLine
+				if lastSpace != -1 {
+					name = fullLine[:lastSpace]
+				}
+				m.chatPartner = name
+				m.state = stateGroup
+				m.chatReady = false
+				m.messages = []ChatMessage{}
+				m.msgInput.Focus()
+				m.banner = fmt.Sprintf("Loading room %s...", name)
+				m.bannerOK = false
+				m.dismissNotification(name)
+			}
+
+		case "JOIN", "LEAVE", "CREATE", "KICK", "INVITE":
+			m.banner = "✓ " + strings.Join(parts[1:], " ")
+			m.bannerOK = true
+			m.messages = append(m.messages, ChatMessage{
+				isSystem: true,
+				content:  "✓ " + strings.Join(parts[1:], " "),
+			})
+			// Auto refresh sidebar
+			go Write(m.conn, "/room")
 		}
 
 	// ── ERR ──────────────────────────────────────────────────────────────────
@@ -332,16 +388,21 @@ func (m Model) handleServerLine(raw string) Model {
 		}
 
 	// ── HIST — chat history line ──────────────────────────────────────────────
-	// Format: HIST <timestamp>|<sender>|<content>
+	// Format: HIST <timestamp>|<sender>|<content>|<reactions>
 	case "HIST":
 		payload := strings.Join(parts[1:], " ")
-		segs := strings.SplitN(payload, "|", 3)
-		if len(segs) == 3 {
+		segs := strings.SplitN(payload, "|", 4)
+		if len(segs) >= 3 {
 			ts, sender, content := segs[0], segs[1], segs[2]
+			reactions := ""
+			if len(segs) == 4 {
+				reactions = segs[3]
+			}
 			m.messages = append(m.messages, ChatMessage{
 				sender:    sender,
 				timestamp: ts,
 				content:   content,
+				reactions: reactions,
 				isSelf:    sender == m.currentUser,
 				isHistory: true,
 			})
@@ -354,16 +415,39 @@ func (m Model) handleServerLine(raw string) Model {
 		}
 
 	// ── MSG — live message ────────────────────────────────────────────────────
-	// Format: MSG <sender>|<timestamp>|<content>
-	//    or:  MSG <sender>|/close  (tempchat partner left)
+	// Format: MSG <sessionID>|<sender>|<timestamp>|<content>
+	//    or:  MSG <sessionID>|<sender>|/close  (tempchat partner left)
 	case "MSG":
 		payload := strings.Join(parts[1:], " ")
-		segs := strings.SplitN(payload, "|", 3)
+		segs := strings.SplitN(payload, "|", 4)
 		switch len(segs) {
+		case 4:
+			if segs[2] == "REACTION" {
+				m.messages = append(m.messages, ChatMessage{
+					isSystem: true,
+					content:  fmt.Sprintf(" %s reacted with %s to last message", segs[1], segs[3]),
+				})
+			} else if segs[3] == "/close" {
+				m.messages = append(m.messages, ChatMessage{
+					content:  segs[1] + " left the chat",
+					isSystem: true,
+				})
+				m.state = stateMenu
+				m.chatPartner = ""
+				m.chatReady = false
+				m.msgInput.Focus()
+			} else {
+				m.messages = append(m.messages, ChatMessage{
+					sender:    segs[1],
+					timestamp: segs[2],
+					content:   segs[3],
+					isSelf:    segs[1] == m.currentUser,
+				})
+			}
 		case 3:
 			if segs[2] == "/close" {
 				m.messages = append(m.messages, ChatMessage{
-					content:  segs[0] + " left the chat",
+					content:  segs[1] + " left the chat",
 					isSystem: true,
 				})
 				m.state = stateMenu
@@ -379,22 +463,11 @@ func (m Model) handleServerLine(raw string) Model {
 				})
 			}
 		case 2:
-			if segs[1] == "/close" {
-				m.messages = append(m.messages, ChatMessage{
-					content:  segs[0] + " left the chat",
-					isSystem: true,
-				})
-				m.state = stateMenu
-				m.chatPartner = ""
-				m.chatReady = false
-				m.msgInput.Focus()
-			} else {
-				m.messages = append(m.messages, ChatMessage{
-					sender:  segs[0],
-					content: segs[1],
-					isSelf:  segs[0] == m.currentUser,
-				})
-			}
+			m.messages = append(m.messages, ChatMessage{
+				sender:  segs[0],
+				content: segs[1],
+				isSelf:  segs[0] == m.currentUser,
+			})
 		default:
 			m.messages = append(m.messages, ChatMessage{
 				content:  payload,
@@ -406,11 +479,13 @@ func (m Model) handleServerLine(raw string) Model {
 	// Format: NOTIFY CHAT <sender>
 	//         NOTIFY TEMPCHAT <sender>
 	//         NOTIFY MSG <sender>
+	//         NOTIFY INVITE <group>
+	//         NOTIFY KICK <group>
 	case "NOTIFY":
 		if len(parts) < 3 {
 			return m
 		}
-		notifType := parts[1] // CHAT, TEMPCHAT, or MSG
+		notifType := parts[1] // CHAT, TEMPCHAT, MSG, INVITE, KICK, GROUP_MSG
 		from := parts[2]
 
 		// Don't notify about your own actions
@@ -418,11 +493,38 @@ func (m Model) handleServerLine(raw string) Model {
 			return m
 		}
 
+		var notif Notification
+		if notifType == "GROUP_MSG" {
+			segs := strings.SplitN(from, "|", 2)
+			if len(segs) == 2 {
+				notif = Notification{from: segs[0], chatType: "group_msg"}
+				m.banner = fmt.Sprintf("🔔 %s messaged in #%s", segs[0], segs[1])
+			} else {
+				return m
+			}
+		} else {
+			notif = Notification{from: from, chatType: strings.ToLower(notifType)}
+			switch notifType {
+			case "CHAT":
+				m.banner = "🔔 @" + from + " wants to /chat"
+			case "TEMPCHAT":
+				m.banner = "🔔 @" + from + " /tempchat"
+			case "MSG":
+				m.banner = "🔔 message from @" + from
+			case "INVITE":
+				m.banner = "★ invited to " + from
+			case "KICK":
+				m.banner = "✖ kicked from " + from
+			}
+		}
+
+		m.bannerOK = true
+
 		// Keep at most 5 notifications
-		notif := Notification{from: from, chatType: strings.ToLower(notifType)}
 		// Avoid duplicate notifications from the same person for the same type
 		for _, n := range m.notifications {
 			if n.from == from && n.chatType == notif.chatType {
+				m.needsBell = true
 				return m
 			}
 		}
@@ -600,10 +702,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 					isSystem: true,
 					content:  helpText(),
 				})
+			case "/theme":
+				if len(fields) >= 2 {
+					if err := LoadTheme(fields[1]); err != nil {
+						m.banner = "✗ Error loading theme: " + err.Error()
+						m.bannerOK = false
+					} else {
+						m.banner = "✓ Theme loaded: " + CurrentTheme.Name
+						m.bannerOK = true
+					}
+				}
 			case "/clear":
 				m.messages = []ChatMessage{}
 				m.searchResult = []string{}
 				m.notifications = []Notification{}
+				m.banner = ""
 			default:
 				go Write(m.conn, raw)
 			}
@@ -619,8 +732,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	// ── PERSISTENT CHAT (/chat) ──────────────────────────────────────────────
-	case stateHistory:
+	case stateHistory, stateGroup:
 		switch msg.Type {
+		case tea.KeyCtrlK:
+			m.viewport.LineUp(1)
+			return m, nil
+		case tea.KeyCtrlJ:
+			m.viewport.LineDown(1)
+			return m, nil
+
 		case tea.KeyCtrlC:
 			go Write(m.conn, "/exit")
 			m.state = stateMenu
@@ -691,6 +811,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	// ──  TEMPCHAT ────────────────────────────────────────────────────
 	case stateChat:
 		switch msg.Type {
+		case tea.KeyCtrlK:
+			m.viewport.LineUp(1)
+			return m, nil
+		case tea.KeyCtrlJ:
+			m.viewport.LineDown(1)
+			return m, nil
+
 		case tea.KeyCtrlC:
 			go Write(m.conn, "/exit")
 			m.state = stateMenu
@@ -764,14 +891,22 @@ func (m Model) View() string {
 
 func helpText() string {
 	return `Available commands:
-  /register <email> <username> <password>
-  /login <email> <password>
-  /room                    — list your chat partners
-  /chat <username>         — open chat with history + live messages
-  /tempchat <username>     — ephemeral real-time chat (no history saved)
-  /send <username> <msg>   — send a one-off message
-  /search <prefix>         — search users by name
-  /clear                   — clear messages and notifications
-  /exit                    — disconnect (or leave chat)
-  [↑/↓]                   — navigate command history`
+  /register <email> <user> <pass>
+  /login <email> <pass>
+  /room                    — list chats/groups
+  /chat <user>             — open private chat
+  /group <name>            — open group chat
+  /global                  — open global room
+  /tempchat <user>         — ephemeral chat
+  /send <user> <msg>       — direct message
+  /search <prefix>         — search users
+  /create <name> [desc]    — create a group
+  /join <name>             — join a group
+  /leave <name>            — leave a group
+  /kick <group> <user>     — kick from group (owner)
+  /invite <group> <user>   — invite to group (owner)
+  /theme <path>            — load a .json theme
+  /clear                   — clear view
+  /exit                    — exit chat/disconnect
+  [↑/↓]                   — history`
 }
