@@ -162,4 +162,4 @@ Copy the example file: `cp term_chat_dev.json.example term_chat_dev.json`.
 ---
 
 ## 📜 License
-MIT License © 2025 [Abhinav Ashish](https://github.com/Abhinav7903)
+MIT License © 2026 [Abhinav Ashish](https://github.com/Abhinav7903)
